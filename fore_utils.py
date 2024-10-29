@@ -24,6 +24,7 @@ class WeatherData(Dataset):
                  area: Tuple[int, int] = (-31.667, 18.239), 
                  spaces: int = 0, 
                  intervals: int = 1,
+                 lightning: bool = False,
                  verbose: bool = False):
         '''
 
@@ -45,17 +46,30 @@ class WeatherData(Dataset):
         elif set == 'test':
             years = ['2023']
 
-        self.data = np.concatenate([np.load(f'datasets/{year}_850_SA.npy') for year in years], axis=1)
-        self.data = self.data.transpose(1, 2, 3, 0)
+        if lightning:
 
-        self.times = np.concatenate([np.load(f'datasets/{year}_850_SA_times.npy') for year in years])
+            self.data = np.concatenate([np.load(f'forecasting_experiments/datasets/{year}_850_SA.npy') for year in years], axis=1)
+            self.data = self.data.transpose(1, 2, 3, 0)
+
+            self.times = np.concatenate([np.load(f'forecasting_experiments/datasets/{year}_850_SA_times.npy') for year in years])
+
+            self.lon = np.load('forecasting_experiments/datasets/SA_lon.npy')
+            self.lat = np.load('forecasting_experiments/datasets/SA_lat.npy')
+
+        else:
+            self.data = np.concatenate([np.load(f'datasets/{year}_850_SA.npy') for year in years], axis=1)
+            self.data = self.data.transpose(1, 2, 3, 0)
+
+            self.times = np.concatenate([np.load(f'datasets/{year}_850_SA_times.npy') for year in years])
+
+            self.lon = np.load('datasets/SA_lon.npy')
+            self.lat = np.load('datasets/SA_lat.npy')
 
         print('40%', end='\r')
 
         # Get lat and long
 
-        self.lon = np.load('datasets\SA_lon.npy')
-        self.lat = np.load('datasets\SA_lat.npy')
+        
 
         self.spaces = spaces
 
@@ -260,7 +274,7 @@ import wandb
 
 def train_model(model, train_loader, val_loader, n_epochs=50, warmup_epochs=5,
                 initial_lr=1e-3, early_stopping_patience=5, 
-                checkpoint_path='best_model.pth'):
+                checkpoint_path='best_model.pth', device=None):
 
     # Initialize criterion and optimizer
     criterion = nn.MSELoss()
@@ -286,6 +300,9 @@ def train_model(model, train_loader, val_loader, n_epochs=50, warmup_epochs=5,
         # Training loop
         for i, batch in enumerate(train_loader):
             x, y = batch
+
+            if device:
+                x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
 
             # Forward pass
@@ -311,6 +328,8 @@ def train_model(model, train_loader, val_loader, n_epochs=50, warmup_epochs=5,
         val_loss = 0.0
         with torch.no_grad():
             for val_x, val_y in val_loader:
+                if device:
+                    val_x, val_y = val_x.to(device), val_y.to(device)
                 val_pred = model(val_x.float())
                 val_loss += criterion(val_pred, val_y.float()).item()
             avg_val_loss = val_loss / len(val_loader)
@@ -352,6 +371,16 @@ def train_model(model, train_loader, val_loader, n_epochs=50, warmup_epochs=5,
     model.load_state_dict(torch.load(checkpoint_path))
     print("Best model loaded for evaluation or further use.")
 
-    # Finalize Weights & Biases logging
-    wandb.finish()
+    
 
+def evaluate_model(model, test_loader, device):
+    model.eval()
+    criterion = nn.MSELoss()
+    test_loss = 0
+    with torch.no_grad():
+        for x, y in test_loader:
+            x, y = x.to(device), y.to(device)
+            y_hat = model(x)
+            loss = criterion(y_hat, y)
+            test_loss += loss.item()
+    return test_loss / len(test_loader)
