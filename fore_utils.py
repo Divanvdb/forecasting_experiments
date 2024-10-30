@@ -76,6 +76,8 @@ class WeatherData(Dataset):
 
         print('50%', end='\r')
 
+        self.series_target = series_target
+
         # Normalize data and sort into variables
 
         if spaces != 0:
@@ -90,13 +92,14 @@ class WeatherData(Dataset):
             u = self.data[:,2]
             v = self.data[:,3]
             w = self.data[:,4]
+            self.series_target = False
 
         q, t, u, v, w = self.normalize(q, t, u, v, w)
 
         print('70%', end='\r')
 
         # Calculate wind speed and direction
-        self.series_target = series_target
+        
 
         self.calculate_wind(u, v)
 
