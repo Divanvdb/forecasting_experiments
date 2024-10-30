@@ -25,6 +25,7 @@ class WeatherData(Dataset):
                  spaces: int = 0, 
                  intervals: int = 1,
                  lightning: bool = False,
+                 series_target: bool = False,
                  verbose: bool = False):
         '''
 
@@ -69,8 +70,6 @@ class WeatherData(Dataset):
 
         # Get lat and long
 
-        
-
         self.spaces = spaces
 
         self.get_area(area)
@@ -97,12 +96,18 @@ class WeatherData(Dataset):
         print('70%', end='\r')
 
         # Calculate wind speed and direction
+        self.series_target = series_target
+
         self.calculate_wind(u, v)
 
         print('90%', end='\r')
 
         # Serup the dataloader
-        self.features = torch.tensor(np.stack([q, t, u, v, w, self.wspd], axis=-1), dtype=torch.float32)
+        if self.series_target:
+            self.features = torch.tensor(np.stack([q, t, u, v, w], axis=-1), dtype=torch.float32)
+        else:
+            self.features = torch.tensor(np.stack([q, t, u, v, w, self.wspd], axis=-1), dtype=torch.float32)
+
         self.targets = torch.tensor(self.wspd, dtype=torch.float32)
         self.window_size = window_size
         self.step_size = step_size
@@ -126,7 +131,7 @@ class WeatherData(Dataset):
         return self.data.shape[0] - self.window_size - self.step_size + 1
 
     def __getitem__(self, idx):
-        return self.features[idx : idx + self.window_size], self.wspd[idx + self.window_size : idx + self.window_size + self.step_size]
+            return self.features[idx : idx + self.window_size], self.targets[idx : idx + self.window_size],self.targets[idx + self.window_size : idx + self.window_size + self.step_size]
     
     def normalize(self, q, t, u, v, w, method = 'std'): 
         if method == 'std':
@@ -139,6 +144,9 @@ class WeatherData(Dataset):
         return q, t, u, v, w        
     
     def calculate_wind(self, u, v):
+        if self.series_target:
+            u = u[:, u.shape[1]//2, u.shape[2]//2]
+            v = v[:, v.shape[1]//2, v.shape[2]//2]
 
         self.wspd = np.sqrt(u**2 + v**2)
         self.wdir = np.arctan2(u, v)
@@ -299,7 +307,7 @@ def train_model(model, train_loader, val_loader, n_epochs=50, warmup_epochs=5,
 
         # Training loop
         for i, batch in enumerate(train_loader):
-            x, y = batch
+            x, _, y = batch
 
             if device:
                 x, y = x.to(device), y.to(device)
@@ -327,7 +335,7 @@ def train_model(model, train_loader, val_loader, n_epochs=50, warmup_epochs=5,
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for val_x, val_y in val_loader:
+            for val_x, _, val_y in val_loader:
                 if device:
                     val_x, val_y = val_x.to(device), val_y.to(device)
                 val_pred = model(val_x.float())
@@ -378,7 +386,7 @@ def evaluate_model(model, test_loader, device):
     criterion = nn.MSELoss()
     test_loss = 0
     with torch.no_grad():
-        for x, y in test_loader:
+        for x,_, y in test_loader:
             x, y = x.to(device), y.to(device)
             y_hat = model(x)
             loss = criterion(y_hat, y)

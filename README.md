@@ -16,7 +16,7 @@ Forecasting accuracy will be assessed based on the following criteria:
 
 **Attention Transformer**: Will be used for both the point and spatial forecasts to compare the same model on similar areas to identify where the models differ. 
 
-### Testing methodology\
+### Testing methodology:
 
 **Locations**:
 **Time horizons**:
