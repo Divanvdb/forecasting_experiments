@@ -10,7 +10,7 @@ from IPython.display import HTML
 import cartopy.crs as ccrs
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 
 from typing import Tuple
 
@@ -50,38 +50,67 @@ class WeatherData(Dataset):
 
         if lightning:
 
-            self.data = np.concatenate([np.load(f'forecasting_experiments/datasets/{year}_850_SA.npy') for year in years], axis=1)
-            self.data = self.data.transpose(1, 2, 3, 0)
+            self.og_data = np.concatenate([np.load(f'forecasting_experiments/datasets/{year}_850_SA.npy') for year in years], axis=1)
+            self.og_data = self.data.transpose(1, 2, 3, 0)
 
             self.times = np.concatenate([np.load(f'forecasting_experiments/datasets/{year}_850_SA_times.npy') for year in years])
 
-            self.lon = np.load('forecasting_experiments/datasets/SA_lon.npy')
-            self.lat = np.load('forecasting_experiments/datasets/SA_lat.npy')
+            self.og_lon = np.load('forecasting_experiments/datasets/SA_lon.npy')
+            self.og_lat = np.load('forecasting_experiments/datasets/SA_lat.npy')
 
         else:
-            self.data = np.concatenate([np.load(f'datasets/{year}_850_SA.npy') for year in years], axis=1)
-            self.data = self.data.transpose(1, 2, 3, 0)
+            self.og_data = np.concatenate([np.load(f'datasets/{year}_850_SA.npy') for year in years], axis=1)
+            self.og_data = self.og_data.transpose(1, 2, 3, 0)
 
             self.times = np.concatenate([np.load(f'datasets/{year}_850_SA_times.npy') for year in years])
 
-            self.lon = np.load('datasets/SA_lon.npy')
-            self.lat = np.load('datasets/SA_lat.npy')
+            self.og_lon = np.load('datasets/SA_lon.npy')
+            self.og_lat = np.load('datasets/SA_lat.npy')
 
         print('40%', end='\r')
 
-        # Get lat and long
 
         self.spaces = spaces
+        self.area = area
 
-        self.get_area(area)
+        self.series_target = series_target
+        
+        self.window_size = window_size
+        self.step_size = step_size
+
+        self.intervals = intervals
+
+        self.verbose = verbose
+
+        self.all_variables = all_variables
+
+        # self.re_init()
+
+        if self.verbose:
+            print(f'Details for {set} set:')
+
+            print(f'Data from {years} loaded')
+
+    def __len__(self):
+        return self.data.shape[0] - self.window_size - self.step_size + 1
+
+    def __getitem__(self, idx):
+        if self.all_variables:
+            return self.features[idx : idx + self.window_size], self.targets[idx : idx + self.window_size],self.features[idx + self.window_size : idx + self.window_size + self.step_size]
+        else:
+            return self.features[idx : idx + self.window_size], self.targets[idx : idx + self.window_size],self.targets[idx + self.window_size : idx + self.window_size + self.step_size]
+    
+    def re_init(self):
+        self.lon = self.og_lon
+        self.lat = self.og_lat
+        self.data = self.og_data
+
+
+        self.get_area(self.area)
 
         print('50%', end='\r')
 
-        self.series_target = series_target
-
-        # Normalize data and sort into variables
-
-        if spaces != 0:
+        if self.spaces != 0:
             q = self.data[:, :, :, 0]
             t = self.data[:, :, :, 1]
             u = self.data[:, :, :, 2]
@@ -95,70 +124,37 @@ class WeatherData(Dataset):
             w = self.data[:,4]
             self.series_target = False
 
-        print('70%', end='\r')
+        q, t, u, v, w = self.normalize(q, t, u, v, w)
 
-        # Calculate wind speed and direction
-        
+        print('65%', end='\r')
 
         self.calculate_wind(u, v)
 
-        q, t, u, v, w = self.normalize(q, t, u, v, w)
+        print('80%', end='\r')
 
-        print('90%', end='\r')
-
-        # Serup the dataloader
         if self.series_target:
             self.features = torch.tensor(np.stack([q, t, u, v, w], axis=-1), dtype=torch.float32)
         else:
             self.features = torch.tensor(np.stack([q, t, u, v, w, self.wspd], axis=-1), dtype=torch.float32)
 
         self.targets = torch.tensor(self.wspd, dtype=torch.float32)
-        self.window_size = window_size
-        self.step_size = step_size
 
         print('100%', end='\r')
 
-        self.intervals = intervals
-
-        self.all_variables = all_variables
-
-        if verbose:
-            print(f'Details for {set} set:')
-
-            print(f'Data from {years} loaded')
-            
+        if self.verbose:
             print(f'Features shape: {self.features.shape}')
             print(f'Targets shape: {self.targets.shape}')
 
             print(f'Longitudes: {self.lon}')
             print(f'Latitudes: {self.lat}')
 
-    def __len__(self):
-        return self.data.shape[0] - self.window_size - self.step_size + 1
-
-    def __getitem__(self, idx):
-        if self.all_variables:
-            return self.features[idx : idx + self.window_size], self.targets[idx : idx + self.window_size],self.features[idx + self.window_size : idx + self.window_size + self.step_size]
-        else:
-            return self.features[idx : idx + self.window_size], self.targets[idx : idx + self.window_size],self.targets[idx + self.window_size : idx + self.window_size + self.step_size]
-        
-    def normalize(self, q, t, u, v, w, method = 'min_max'): 
+    def normalize(self, q, t, u, v, w, method = 'std'): 
         if method == 'std':
             q = (q - q.mean()) / q.std()
             t = (t - t.mean()) / t.std()
             u = (u - u.mean()) / u.std()
             v = (v - v.mean()) / v.std()
             w = (w - w.mean()) / w.std()
-
-            self.wspd = (self.wspd - self.wspd.mean()) / self.wspd.std()
-        elif method == 'min_max':
-            q = (q - q.min()) / (q.max() - q.min())
-            t = (t - t.min()) / (t.max() - t.min())
-            u = (u - u.min()) / (u.max() - u.min())
-            v = (v - v.min()) / (v.max() - v.min())
-            w = (w - w.min()) / (w.max() - w.min())
-
-            self.wspd = (self.wspd - self.wspd.min()) / (self.wspd.max() - self.wspd.min())
 
         return q, t, u, v, w        
     
@@ -168,7 +164,7 @@ class WeatherData(Dataset):
             v = v[:, v.shape[1]//2, v.shape[2]//2]
 
         self.wspd = np.sqrt(u**2 + v**2)
-        self.wdir = np.arctan2(u, v)
+        # self.wdir = np.arctan2(u, v)
 
     def get_area(self, area: Tuple[int, int]):
         lon = np.argmin(np.abs(self.lon - area[1]))
@@ -180,13 +176,13 @@ class WeatherData(Dataset):
             self.lon = self.lon[lon - self.spaces:lon + self.spaces]
             self.lat = self.lat[lat - self.spaces: lat + self.spaces]
 
-            self.data = self.data[:, lat - self.spaces: lat + self.spaces, lon - self.spaces:lon + self.spaces, :]
+            self.data = self.og_data[:, lat - self.spaces: lat + self.spaces, lon - self.spaces:lon + self.spaces, :]
         else:
 
             self.lon = self.lon[lon]
             self.lat = self.lat[lat]
 
-            self.data = self.data[:, lat, lon, :]
+            self.data = self.og_data[:, lat, lon, :]
 
     def plot_area(self):
         if self.spaces != 0:
@@ -289,8 +285,139 @@ class WeatherData(Dataset):
             plt.legend()
             plt.show()
         else:
-            print('Cannot plot point with multiple points')           
+            print('Cannot plot point with multiple points')        
 
+    def plot_prediction(self, model, seed: int = 0, frame_rate: int = 16, levels: int = 10) -> HTML:
+        if self.spaces != 0:
+            bounds = [self.lon.min(), self.lon.max(), self.lat.min(), self.lat.max()]
+
+            features = self.features[seed:seed + self.window_size * self.intervals:self.intervals]
+            targets = self.targets[seed + self.window_size * self.intervals:seed + (self.window_size + self.step_size) * self.intervals: self.intervals].detach().numpy()   
+
+            predictions = model(features.unsqueeze(0)).detach().numpy().squeeze()
+
+            time_targets = self.times[seed + self.window_size * self.intervals:seed + (self.window_size + self.step_size) * self.intervals: self.intervals]
+
+            time_targets = pd.to_datetime(time_targets)
+
+            
+            fig, axs = plt.subplots(2, 3, figsize=(21, 7), subplot_kw={'projection': ccrs.PlateCarree()})
+
+            vmin = min(predictions.min().item(), targets.min().item())
+            vmax = max(predictions.max().item(), targets.max().item())
+
+            fig.subplots_adjust(left=0.05, right=0.95, bottom=0.1, top=0.9, wspace=0.2)
+
+            for ax in axs.flatten()[:-1]:
+                ax.set_extent(bounds, crs=ccrs.PlateCarree())
+                ax.coastlines()
+
+            ax_last = fig.add_subplot(2, 3, 6)
+
+            print('Predictions:', predictions.shape)
+            print('Targets:', targets.shape)
+
+            pred = axs[0, 0].contourf(self.lon, self.lat, predictions[0], levels=levels, vmin=vmin, vmax = vmax, transform=ccrs.PlateCarree())
+            tar = axs[0, 1].contourf(self.lon, self.lat, targets[0], levels=levels, vmin=vmin, vmax = vmax, transform=ccrs.PlateCarree())
+
+            error = (predictions[0] - targets[0].squeeze()) 
+
+            err = axs[0, 2].contourf(self.lon, self.lat, error.squeeze(), levels=levels, transform=ccrs.PlateCarree(), cmap='coolwarm')
+
+            perc_error = error / targets[0,0].squeeze() * 100
+            perc_error = np.clip(perc_error, -100, 100)
+            rmse = np.sqrt(error**2)
+
+            perr = axs[1, 0].contourf(self.lon, self.lat, perc_error, levels=levels, transform=ccrs.PlateCarree(), cmap='coolwarm')
+            rms = axs[1, 1].contourf(self.lon, self.lat, rmse, levels=levels, transform=ccrs.PlateCarree(), cmap='coolwarm')
+            ax_last.scatter(targets[0].flatten(), predictions[0].flatten(), c=error, cmap='coolwarm')
+
+            fig.colorbar(pred, ax=axs[0, 0], orientation='vertical', label='Wind Speed (m/s)')
+            fig.colorbar(tar, ax=axs[0, 1], orientation='vertical', label='Wind Speed (m/s)')
+            fig.colorbar(err, ax=axs[0, 2], orientation='vertical', label='Percentage Error (%)')
+            fig.colorbar(perr, ax=axs[1, 0], orientation='vertical', label='Percentage Error (%)')
+            fig.colorbar(rms, ax=axs[1, 1], orientation='vertical', label='Root Mean Squared Error (m/s)')
+
+            ax_last.set_xlabel("Observed Wind Speed (m/s)")
+            ax_last.set_ylabel("Forecasted Wind Speed (m/s)")
+
+            def animate(i):
+                for ax in axs.flatten()[:-1]:
+                    ax.clear()
+                    ax.coastlines()
+                
+                ax_last.clear()
+                ax_last.set_xlabel("Observed Wind Speed (m/s)")
+                ax_last.set_ylabel("Forecasted Wind Speed (m/s)")
+
+                axs[0, 0].contourf(self.lon, self.lat, predictions[i], levels=levels, vmin=vmin, vmax = vmax)
+                axs[0, 1].contourf(self.lon, self.lat, targets[i], levels=levels, vmin=vmin, vmax = vmax)
+                
+                error =  (predictions[i] - targets[i].squeeze())
+                axs[0, 2].contourf(self.lon, self.lat, error, levels=levels, transform=ccrs.PlateCarree(), cmap='coolwarm')
+                
+                perc_error = error / targets[i % self.step_size].squeeze() * 100
+                perc_error = np.clip(perc_error, -100, 100)
+                rmse = np.sqrt(error**2)
+
+                axs[1, 0].contourf(self.lon, self.lat, perc_error, levels=levels, transform=ccrs.PlateCarree(), cmap='coolwarm')
+                axs[1, 1].contourf(self.lon, self.lat, rmse, levels=levels, transform=ccrs.PlateCarree(), cmap='coolwarm')
+                ax_last.scatter(targets[i].flatten(), predictions[i].flatten(), c=error, cmap='coolwarm')
+
+                axs[0, 0].set_title(f'Prediction {i} - {time_targets[i].strftime("%Y-%m-%d %H:%M:%S")}')  
+                axs[0, 1].set_title(f'Target - {time_targets[i].strftime("%Y-%m-%d %H:%M:%S")}')
+                axs[0, 2].set_title(f'Error - {time_targets[i].strftime("%Y-%m-%d %H:%M:%S")}')
+                axs[1, 0].set_title(f'Percentage Error - {time_targets[i].strftime("%Y-%m-%d %H:%M:%S")}')
+                axs[1, 1].set_title(f'Root Mean Squared Error - {time_targets[i].strftime("%Y-%m-%d %H:%M:%S")}')
+                ax_last.set_title(f'Error Scatter Plot - {time_targets[i].strftime("%Y-%m-%d %H:%M:%S")}')
+
+            frames = predictions.shape[0]
+
+            interval = 1000 / frame_rate
+
+            ani = FuncAnimation(fig, animate, frames=frames, interval=interval)
+
+            plt.close(fig)
+
+            return HTML(ani.to_jshtml())
+
+        else:
+            print('Cannot plot area with only one point')
+
+    def plot_point_pred(self, model, seed: int = 0, specific: int = 0):
+        if self.spaces == 0:
+            plt.figure(figsize=(10, 5))
+
+            features = self.features[seed:seed + self.window_size]
+            targets = self.targets[seed + self.window_size:seed + self.window_size + self.step_size].detach().numpy()
+
+            predictions = model(features.unsqueeze(0)).detach().numpy().squeeze()
+
+            time_inputs = self.times[seed:seed + self.window_size]
+
+            time_targets = self.times[seed + self.window_size:seed + self.window_size + self.step_size]
+
+            time_inputs = pd.to_datetime(time_inputs)
+            time_targets = pd.to_datetime(time_targets)
+
+            plt.plot(time_inputs, features[:, 5], label='Input Wind Speed')
+
+            plt.plot(time_targets, targets, label='Target')
+            if specific == 0:
+                plt.plot(time_targets, predictions, label='Prediction')
+            else:
+                plt.plot(time_targets, predictions[:,specific], label='Prediction')
+
+            plt.title('Wind Speed Prediction')
+
+            plt.xlabel('Time')
+            plt.ylabel('Wind Speed (m/s)')
+
+            plt.xticks(rotation=45)
+            plt.legend()
+            plt.show()
+        else:
+            print('Cannot plot point with multiple points')
 # Training model
 
 import torch
