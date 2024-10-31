@@ -24,6 +24,7 @@ class WeatherData(Dataset):
                  area: Tuple[int, int] = (-31.667, 18.239), 
                  spaces: int = 0, 
                  intervals: int = 1,
+                 all_variables: bool = False,
                  lightning: bool = False,
                  series_target: bool = False,
                  verbose: bool = False):
@@ -94,14 +95,14 @@ class WeatherData(Dataset):
             w = self.data[:,4]
             self.series_target = False
 
-        q, t, u, v, w = self.normalize(q, t, u, v, w)
-
         print('70%', end='\r')
 
         # Calculate wind speed and direction
         
 
         self.calculate_wind(u, v)
+
+        q, t, u, v, w = self.normalize(q, t, u, v, w)
 
         print('90%', end='\r')
 
@@ -119,6 +120,8 @@ class WeatherData(Dataset):
 
         self.intervals = intervals
 
+        self.all_variables = all_variables
+
         if verbose:
             print(f'Details for {set} set:')
 
@@ -134,15 +137,28 @@ class WeatherData(Dataset):
         return self.data.shape[0] - self.window_size - self.step_size + 1
 
     def __getitem__(self, idx):
+        if self.all_variables:
+            return self.features[idx : idx + self.window_size], self.targets[idx : idx + self.window_size],self.features[idx + self.window_size : idx + self.window_size + self.step_size]
+        else:
             return self.features[idx : idx + self.window_size], self.targets[idx : idx + self.window_size],self.targets[idx + self.window_size : idx + self.window_size + self.step_size]
-    
-    def normalize(self, q, t, u, v, w, method = 'std'): 
+        
+    def normalize(self, q, t, u, v, w, method = 'min_max'): 
         if method == 'std':
             q = (q - q.mean()) / q.std()
             t = (t - t.mean()) / t.std()
             u = (u - u.mean()) / u.std()
             v = (v - v.mean()) / v.std()
             w = (w - w.mean()) / w.std()
+
+            self.wspd = (self.wspd - self.wspd.mean()) / self.wspd.std()
+        elif method == 'min_max':
+            q = (q - q.min()) / (q.max() - q.min())
+            t = (t - t.min()) / (t.max() - t.min())
+            u = (u - u.min()) / (u.max() - u.min())
+            v = (v - v.min()) / (v.max() - v.min())
+            w = (w - w.min()) / (w.max() - w.min())
+
+            self.wspd = (self.wspd - self.wspd.min()) / (self.wspd.max() - self.wspd.min())
 
         return q, t, u, v, w        
     
@@ -285,11 +301,10 @@ import wandb
 
 def train_model(model, train_loader, val_loader, n_epochs=50, warmup_epochs=5,
                 initial_lr=1e-3, early_stopping_patience=5, 
-                checkpoint_path='best_model.pth', device=None):
+                checkpoint_path='best_model.pth', device=None, debug = False, criterion = nn.MSELoss(), optimizer = optim.Adam):
 
     # Initialize criterion and optimizer
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=initial_lr)
+    optimizer = optimizer(model.parameters(), lr=initial_lr)
 
     # Warmup and Main Scheduler
     def lr_lambda(epoch):
@@ -317,8 +332,14 @@ def train_model(model, train_loader, val_loader, n_epochs=50, warmup_epochs=5,
             optimizer.zero_grad()
 
             # Forward pass
-            y_pred = model(x.float())
-            loss = criterion(y_pred, y.float())
+            if debug:
+                print('x:', x.shape)
+                print('y:', y.shape)
+            y_pred = model(x)
+
+            if debug:
+                print('y_pred:', y_pred.shape)
+            loss = criterion(y_pred, y)
             epoch_loss += loss.item()
 
             # Backward pass and optimization
