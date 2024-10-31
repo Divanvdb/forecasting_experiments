@@ -51,7 +51,7 @@ class WeatherData(Dataset):
         if lightning:
 
             self.og_data = np.concatenate([np.load(f'forecasting_experiments/datasets/{year}_850_SA.npy') for year in years], axis=1)
-            self.og_data = self.data.transpose(1, 2, 3, 0)
+            self.og_data = self.og_data.transpose(1, 2, 3, 0)
 
             self.times = np.concatenate([np.load(f'forecasting_experiments/datasets/{year}_850_SA_times.npy') for year in years])
 
@@ -462,6 +462,7 @@ def train_model(model, train_loader, val_loader, n_epochs=50, warmup_epochs=5,
             if debug:
                 print('x:', x.shape)
                 print('y:', y.shape)
+                print('device:', device)
             y_pred = model(x)
 
             if debug:
